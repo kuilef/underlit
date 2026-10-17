@@ -21,15 +21,11 @@
     <!-- Single-file publish friendly -->
     <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>false</SelfContained>
-    <!--
-      v0.6.64: pre-JIT the assembly to native code at publish time. Cuts
-      cold-start time noticeably on first-of-the-day launches, where the
-      JIT would otherwise be churning through ~150 methods on the critical
-      path before the OSD can render or hotkeys can fire. R2R is opt-in,
-      framework-dependent friendly, and adds ~30% to the publish output
-      size — well worth it for a tray app the user expects to feel native.
-    -->
-    <PublishReadyToRun>true</PublishReadyToRun>
+    <!-- Avoid a large extra native image for this small tray application.
+         The runtime's framework libraries are already precompiled. -->
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <EnableCompressionInSingleFile Condition="'$(PublishSingleFile)' == 'true' and '$(SelfContained)' == 'true'">true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract Condition="'$(PublishSingleFile)' == 'true'">true</IncludeNativeLibrariesForSelfExtract>
     <TieredCompilation>true</TieredCompilation>
     <TieredPGO>true</TieredPGO>
   </PropertyGroup>

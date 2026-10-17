@@ -28,6 +28,24 @@ dotnet publish src/Underlit/Underlit.csproj -c Release -r win-x64 --self-contain
 
 The single-file `publish\Underlit.exe` is ready to run. To build a proper installer, install [Inno Setup 6](https://jrsoftware.org/isdl.php) and compile `installer/Underlit.iss`.
 
+For smaller downloads, use a publish profile:
+
+```powershell
+# Compressed standalone EXE, including .NET Desktop Runtime.
+dotnet publish src/Underlit/Underlit.csproj -c Release -p:PublishProfile=PortableCompact
+
+# Smaller EXE using an installed .NET 8 Desktop Runtime (x64).
+dotnet publish src/Underlit/Underlit.csproj -c Release -p:PublishProfile=DesktopRuntime
+```
+
+The profiles write to `artifacts/portable-compact` and `artifacts/desktop-runtime`.
+Both contain the same application features. ReadyToRun is disabled to avoid a
+large extra precompiled image. The standalone profile compresses its embedded
+libraries and may take longer to start; this does not add a fade delay when
+adjusting brightness. Native libraries are bundled and extracted on first use.
+The DesktopRuntime profile requires `Microsoft.WindowsDesktop.App 8.x` (x64);
+the base .NET Runtime alone is insufficient. WPF is not trimmed.
+
 ## Run
 
 Launch `Underlit.exe`. It lives in the system tray — left-click opens settings, right-click pauses or quits.

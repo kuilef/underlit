@@ -2,6 +2,7 @@ bin/
 obj/
 .dotnet/
 publish/
+artifacts/
 *.user
 .vs/
 .idea/

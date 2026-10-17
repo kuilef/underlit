@@ -195,17 +195,14 @@ if ($Uninstall) {
 }
 
 # 2. dotnet publish - same flags release.yml uses.
-# v0.6.64: -p:PublishReadyToRun=true pre-JITs the assembly to native code,
-# cutting cold-start time on first-of-the-day launches noticeably. The
-# csproj also sets this, but passing it on the CLI keeps the intent
-# obvious here.
-Write-Host "Publishing self-contained single-file build with R2R (v$version)..." -ForegroundColor Cyan
+# Compression and ReadyToRun defaults come from the project so local installs
+# and release builds use the same compact packaging.
+Write-Host "Publishing compact self-contained single-file build (v$version)..." -ForegroundColor Cyan
 if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
 dotnet publish $proj `
     -c Release -r win-x64 `
     --self-contained true `
     -p:PublishSingleFile=true `
-    -p:PublishReadyToRun=true `
     -p:Version=$version `
     -o $publishDir `
     -nologo -v:m
