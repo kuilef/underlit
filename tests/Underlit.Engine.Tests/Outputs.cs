@@ -19,6 +19,7 @@ namespace Underlit.Display
         public HashSet<string> Unavailable { get; } = new(StringComparer.OrdinalIgnoreCase);
         private IReadOnlyList<DisplayInfo> _displays = Array.Empty<DisplayInfo>();
         public void Register(IReadOnlyList<DisplayInfo> displays) => _displays = displays;
+        public void Invalidate() { }
         public IReadOnlySet<string> Apply(double brightness, int kelvin)
             => _displays.Where(d => !Unavailable.Contains(d.DeviceName))
                 .Select(d => d.DeviceName).ToHashSet(StringComparer.OrdinalIgnoreCase);

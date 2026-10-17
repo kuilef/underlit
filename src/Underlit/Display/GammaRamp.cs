@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace Underlit.Display;
 
@@ -21,12 +22,17 @@ public sealed class GammaRampApplier : IDisposable
     private readonly Dictionary<string, IntPtr> _dcByDevice = new(StringComparer.OrdinalIgnoreCase);
     // device-name -> original ramp captured at startup so we can restore cleanly.
     private readonly Dictionary<string, ushort[]> _originalRamps = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (double Brightness, int Warmth, long WrittenAt)> _applied = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan CacheFreshness = TimeSpan.FromMilliseconds(500);
     private bool _disposed;
 
     public void Register(IEnumerable<DisplayInfo> displays)
     {
         lock (_lock)
         {
+            // Windows resets ramps on display changes, including changes that
+            // retain the same device name and DC.
+            _applied.Clear();
             // Close stale DCs for monitors that disappeared.
             var currentNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var d in displays) currentNames.Add(d.DeviceName);
@@ -92,11 +98,31 @@ public sealed class GammaRampApplier : IDisposable
 
         lock (_lock)
         {
+            ushort[]? ramp = null;
             foreach (var kvp in _dcByDevice)
             {
-                var ramp = BuildRamp(brightness, rgb.r, rgb.g, rgb.b);
-                if (NativeMethods.SetDeviceGammaRamp(kvp.Value, ramp))
+                if (_applied.TryGetValue(kvp.Key, out var previous)
+                    && previous.Brightness == brightness && previous.Warmth == warmthKelvin
+                    && Stopwatch.GetElapsedTime(previous.WrittenAt) < CacheFreshness)
+                {
                     applied.Add(kvp.Key);
+                    continue;
+                }
+                // Software-only brightness ramps leave gamma unchanged. Avoid
+                // synchronous driver calls (~15 ms per screen on some GPUs)
+                // on every 16 ms overlay tick.
+                ramp ??= BuildRamp(brightness, rgb.r, rgb.g, rgb.b);
+                if (NativeMethods.SetDeviceGammaRamp(kvp.Value, ramp))
+                {
+                    // Ramps are global: periodically reassert even identical
+                    // targets in case calibration software changed the driver.
+                    _applied[kvp.Key] = (brightness, warmthKelvin, Stopwatch.GetTimestamp());
+                    applied.Add(kvp.Key);
+                }
+                else
+                {
+                    _applied.Remove(kvp.Key);
+                }
             }
         }
         // Missing DCs and rejected writes are both absent. The engine compensates
@@ -109,11 +135,18 @@ public sealed class GammaRampApplier : IDisposable
     {
         lock (_lock)
         {
+            _applied.Clear();
             foreach (var kvp in _dcByDevice)
             {
                 TryRestoreRamp(kvp.Value, kvp.Key);
             }
         }
+    }
+
+    /// <summary>Force the next apply to reach the driver after sleep resets gamma.</summary>
+    public void Invalidate()
+    {
+        lock (_lock) _applied.Clear();
     }
 
     private void TryRestoreRamp(IntPtr dc, string device)
@@ -214,6 +247,7 @@ public sealed class GammaRampApplier : IDisposable
             }
             _dcByDevice.Clear();
             _originalRamps.Clear();
+            _applied.Clear();
         }
     }
 }

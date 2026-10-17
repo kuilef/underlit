@@ -176,6 +176,7 @@ public sealed class UnderlitEngine : IDisposable
     /// </summary>
     public void ReapplyAfterResume()
     {
+        _gamma.Invalidate();
         _currentSignedLevel = _targetSignedLevel;
         _currentWarmthRendered = _targetWarmth;
         WriteHardwareAsync(_hardwareLevel);

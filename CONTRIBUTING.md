@@ -38,6 +38,7 @@ See the **Architecture notes** section in the [README](README.md).
 
 ```powershell
 dotnet run --project tests/Underlit.Engine.Tests -c Release
+dotnet run --project tests/Underlit.Display.Tests -c Release
 ```
 
 This dependency-free runner compiles the actual engine and settings sources with
@@ -52,6 +53,14 @@ monitor. Continue below 0, return to 100, pause/resume, then reconnect a monitor
 The overlay must cover the entire monitor, including screens left of the primary
 or using a different DPI. Build the main application separately to verify its
 native display and WPF integration.
+
+The display runner compiles the real gamma applier with a replacement for native
+GDI calls. It checks that unchanged gamma avoids driver writes while changed
+warmth, extended dimming, failed writes, display changes and resume still reach
+the driver. Identical targets are reasserted after 500 ms to recover from external
+gamma changes. Software brightness follows the configured smooth ramp; normal
+hardware brightness is sent immediately, so a small difference in response is
+expected when smooth ramping is enabled.
 
 ## Pull requests
 
