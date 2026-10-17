@@ -7,7 +7,10 @@
 ; MyAppVersion is injected by CI on the command line: /DMyAppVersion=x.y.z
 ; If compiling locally (without /D), fall back to this default.
 #ifndef MyAppVersion
-  #define MyAppVersion "0.1.0"
+  #define MyAppVersion "0.7.3"
+#endif
+#ifndef MyAppSourceDir
+  #define MyAppSourceDir "..\publish"
 #endif
 #define MyAppPublisher "Underlit"
 #define MyAppExeName "Underlit.exe"
@@ -17,6 +20,9 @@ AppId={{A4F9E6D2-0001-4F40-8F2B-3EA7D9E8F111}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL=https://github.com/kuilef/underlit
+AppSupportURL=https://github.com/kuilef/underlit/issues
+AppUpdatesURL=https://github.com/kuilef/underlit/releases
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -29,6 +35,9 @@ PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 UninstallDisplayIcon={app}\{#MyAppExeName}
+CloseApplications=yes
+CloseApplicationsFilter=Underlit.exe
+RestartApplications=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -38,7 +47,9 @@ Name: "startwithwindows"; Description: "Start {#MyAppName} when I sign in"; Grou
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 
 [Files]
-Source: "..\publish\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+; PublishSingleFile + native-library bundling produces one complete executable.
+; Do not include sibling experimental builds or old outputs from publish/.
+Source: "{#MyAppSourceDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

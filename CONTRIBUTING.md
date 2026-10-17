@@ -28,7 +28,12 @@ For the installer:
 # Output: installer\Output\UnderlitSetup-<version>.exe
 ```
 
-CI runs both steps automatically when a `v*` tag is pushed — so contributors don't need Inno Setup installed.
+CI runs the regression checks, publishes both compact packages, and tests the
+installer on each push to `main`. A matching `vX.Y.Z` tag publishes a Release
+after those checks pass. The tag must match `<Version>` in the project and have
+release notes at `docs/releases/X.Y.Z.md`. Contributors do not need Inno Setup
+installed locally. The installer smoke test runs only on a disposable Windows
+GitHub Actions runner and refuses to overwrite an existing installation or settings.
 
 ## Code layout
 

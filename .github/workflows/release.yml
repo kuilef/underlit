@@ -1,77 +1,126 @@
 name: Build & release
 
-# Triggers:
-#   • Tag push matching v* (created via "Draft a new release" or git tag)
-#   • Manual fire from the Actions tab (workflow_dispatch) — pick a tag to build.
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build (e.g. v0.1.4)'
+        description: 'Existing release tag (for example v0.7.3)'
         required: true
-        default: 'v0.1.4'
+        default: 'v0.7.3'
 
 permissions:
-  contents: write   # needed so the workflow can upload the installer to the release
+  contents: write
 
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - name: Resolve tag (push vs manual dispatch)
-        id: tag
-        shell: pwsh
-        run: |
-          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') {
-            '${{ inputs.tag }}'
-          } else {
-            '${{ github.ref_name }}'
-          }
-          "name=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8
-          $v = $tag -replace '^v', ''
-          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8
-          Write-Host "Building tag: $tag (version: $v)"
-
-      - name: Checkout source at the tag
+      - name: Checkout exact source
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.tag.outputs.name }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+
+      - name: Resolve release version
+        id: tag
+        shell: pwsh
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          [xml]$project = Get-Content src/Underlit/Underlit.csproj
+          $version = @($project.Project.PropertyGroup.Version | Where-Object { $_ })[0]
+          $publish = $env:GITHUB_REF_TYPE -eq 'tag' -or $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch'
+          $tag = if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') { $env:REQUESTED_TAG } elseif ($publish) { $env:GITHUB_REF_NAME } else { "v$version" }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+$' -or $tag -ne "v$version") {
+            throw "Tag '$tag' does not match project version '$version'."
+          }
+          "name=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "commit=$(git rev-parse HEAD)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "publish=$($publish.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Install .NET 8 SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish self-contained single-file build
+      - name: Run brightness regression checks
         shell: pwsh
         run: |
-          dotnet publish src/Underlit/Underlit.csproj `
-            -c Release -r win-x64 `
-            --self-contained true `
-            -p:PublishSingleFile=true `
-            -p:Version=${{ steps.tag.outputs.version }} `
-            -o publish
+          dotnet run --project tests/Underlit.Engine.Tests -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --project tests/Underlit.Display.Tests -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Install Inno Setup via Chocolatey
+      - name: Publish both Windows packages
+        shell: pwsh
+        run: |
+          dotnet publish src/Underlit/Underlit.csproj -c Release -p:PublishProfile=PortableCompact
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet publish src/Underlit/Underlit.csproj -c Release -p:PublishProfile=DesktopRuntime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup -y --no-progress
 
-      - name: Compile the installer
+      - name: Compile installer
         shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
-            "/DMyAppVersion=${{ steps.tag.outputs.version }}" `
-            installer/Underlit.iss
+          $compiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          $iscc = if ($compiler) { $compiler.Source } else { "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          $source = (Resolve-Path artifacts/portable-compact).Path
+          $output = (New-Item -ItemType Directory -Path artifacts/release -Force).FullName
+          & $iscc "/DMyAppVersion=$env:RELEASE_VERSION" "/DMyAppSourceDir=$source" "/O$output" installer/Underlit.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Create GitHub Release and attach installer
+      - name: Test installation and removal
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          ./scripts/test-installer.ps1 -InstallerPath "artifacts/release/UnderlitSetup-$env:RELEASE_VERSION.exe" -ExpectedExePath artifacts/portable-compact/Underlit.exe -ExpectedVersion $env:RELEASE_VERSION
+
+      - name: Package portable downloads and checksums
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          Compress-Archive -LiteralPath artifacts/portable-compact/Underlit.exe -DestinationPath "artifacts/release/Underlit-$env:RELEASE_VERSION-portable-win-x64.zip" -CompressionLevel Optimal
+          Compress-Archive -LiteralPath artifacts/desktop-runtime/Underlit.exe -DestinationPath "artifacts/release/Underlit-$env:RELEASE_VERSION-desktop-runtime-win-x64.zip" -CompressionLevel Optimal
+          Get-ChildItem artifacts/release -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content artifacts/release/SHA256SUMS.txt -Encoding ascii
+
+      - name: Save build outputs and installer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Underlit-win-x64-${{ github.run_number }}
+          path: |
+            artifacts/release
+            artifacts/installer-smoke
+          retention-days: 7
+          compression-level: 0
+
+      - name: Publish GitHub Release
+        if: steps.tag.outputs.publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
-          name: ${{ steps.tag.outputs.name }}
-          files: installer/Output/*.exe
+          target_commitish: ${{ steps.tag.outputs.commit }}
+          name: Underlit ${{ steps.tag.outputs.version }} (kuilef fork)
+          body_path: docs/releases/${{ steps.tag.outputs.version }}.md
+          files: |
+            artifacts/release/UnderlitSetup-*.exe
+            artifacts/release/Underlit-*.zip
+            artifacts/release/SHA256SUMS.txt
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
-          generate_release_notes: true
