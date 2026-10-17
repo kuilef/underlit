@@ -111,6 +111,9 @@ public sealed class UnderlitEngine : IDisposable
     // Debounce: last-value we've sent via WMI/DDC-CI. Also the anchor for
     // "is this WMI read an external change or our own echo?" in the sync poller.
     private readonly Dictionary<string, int> _lastAppliedHardwarePct = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _failedHardwareDisplays = new(StringComparer.OrdinalIgnoreCase);
+    private int _displayGeneration;
+    private bool _disposed;
 
     public UnderlitEngine(AppSettings settings, Dispatcher dispatcher,
                        GammaRampApplier gamma, OverlayManager overlays, HardwareBrightness hardware)
@@ -141,6 +144,9 @@ public sealed class UnderlitEngine : IDisposable
 
     public void RefreshDisplays(List<DisplayInfo> displays)
     {
+        System.Threading.Interlocked.Increment(ref _displayGeneration);
+        _lastAppliedHardwarePct.Clear();
+        _failedHardwareDisplays.Clear();
         _displays = displays;
         _gamma.Register(displays);
         _hardware.Register(displays);
@@ -347,9 +353,11 @@ public sealed class UnderlitEngine : IDisposable
         if ((DateTime.UtcNow - _lastHwWriteAttempt).TotalMilliseconds < ExternalSyncGracePeriodMs)
             return;
 
-        var primaryId = _displays.FirstOrDefault(d => d.IsPrimary)?.StableId;
-        if (primaryId != null
-            && _lastAppliedHardwarePct.TryGetValue(primaryId, out var last)
+        // WMI reports the internal panel, even when an external DDC monitor is
+        // primary. Only the WMI owner's cache can be marked as already applied.
+        var wmiId = _displays.FirstOrDefault(d => _hardware.PathFor(d) == HardwareBrightness.Path.Wmi)?.StableId;
+        if (wmiId != null
+            && _lastAppliedHardwarePct.TryGetValue(wmiId, out var last)
             && Math.Abs(last - hwPct) <= 1)
         {
             return; // matches our echo — nothing external
@@ -360,11 +368,18 @@ public sealed class UnderlitEngine : IDisposable
 
         // We didn't write this value — Windows did — so mark it as already applied
         // so our next WMI write doesn't think we need to re-send.
-        if (primaryId != null) _lastAppliedHardwarePct[primaryId] = hwPct;
+        if (wmiId != null)
+        {
+            _lastAppliedHardwarePct[wmiId] = hwPct;
+            _failedHardwareDisplays.Remove(wmiId);
+        }
 
         _settings.BrightnessLevel = DerivedSigned();
         _targetSignedLevel = DerivedSigned();
         _currentSignedLevel = _targetSignedLevel; // snap, don't ramp for external changes
+        // The native control already set this panel. Broadcast to the other
+        // monitors without reapplying its offset and overriding the user's value.
+        WriteHardwareAsync(_hardwareLevel, wmiId);
         ApplySoftwareNow();
         LevelChanged?.Invoke(CurrentBrightness, _targetWarmth);
     }
@@ -586,6 +601,7 @@ public sealed class UnderlitEngine : IDisposable
         {
             _overlays.SetOpacity(0);
             _gamma.Apply(1.0, 6500);
+            PublishOverlayOpacity(0);
             return;
         }
 
@@ -594,7 +610,8 @@ public sealed class UnderlitEngine : IDisposable
 
         if (level >= 0)
         {
-            // Positive range — hardware is doing the work; software stays neutral.
+            // Hardware-capable monitors stay neutral. Software-only monitors
+            // receive their own overlay below.
             gamma = 1.0;
             overlay = 0;
         }
@@ -607,8 +624,44 @@ public sealed class UnderlitEngine : IDisposable
             overlay = descent < 0.5 ? 0 : (descent - 0.5) * 2 * 0.88;
         }
 
-        _gamma.Apply(gamma, _currentWarmthRendered);
-        ApplyOverlayToAll(overlay);
+        var gammaApplied = _gamma.Apply(gamma, _currentWarmthRendered);
+        var perMonitor = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var display in _displays)
+        {
+            double opacity = overlay;
+            double offset = _settings.PerMonitor.TryGetValue(display.StableId, out var pm)
+                ? pm.BrightnessOffset : 0;
+            bool softwareOnly = _hardware.PathFor(display) == HardwareBrightness.Path.None
+                || _failedHardwareDisplays.Contains(display.StableId);
+
+            if (softwareOnly)
+            {
+                // A monitor without usable WMI/DDC still follows the positive
+                // half of the slider. At zero keep a visible software floor,
+                // then compose extended dimming on top without a jump at zero.
+                double hardwarePercent = Math.Clamp(Math.Max(0, level) + offset, 0, 100);
+                double hardwareOpacity = (1 - hardwarePercent / 100.0) * 0.65;
+                opacity = 1 - (1 - hardwareOpacity) * (1 - opacity);
+            }
+            else
+            {
+                // Preserve the existing per-monitor trim on hardware displays.
+                opacity += -offset / 100.0 * 0.88;
+            }
+
+            if (!gammaApplied.Contains(display.DeviceName))
+                opacity = 1 - gamma * (1 - opacity);
+            perMonitor[display.DeviceName] = Math.Clamp(opacity, 0, 0.92);
+        }
+        _overlays.SetOpacityPerMonitor(perMonitor, overlay);
+        // The OSD is anchored above the primary taskbar. A dimmed secondary
+        // must not darken the primary display's OSD glass.
+        var osdDisplay = _displays.FirstOrDefault(d => d.IsPrimary) ?? _displays.FirstOrDefault();
+        PublishOverlayOpacity(osdDisplay != null ? perMonitor[osdDisplay.DeviceName] : overlay);
+    }
+
+    private void PublishOverlayOpacity(double overlay)
+    {
         // v0.6.78: surface the live overlay opacity so the OSD can mirror
         // it as a black tint on its glass interior. Fires every ramp tick
         // (cheap — just a delegate invocation per subscriber) so the OSD
@@ -643,12 +696,15 @@ public sealed class UnderlitEngine : IDisposable
     private DateTime _lastHwWriteAttempt = DateTime.MinValue;
     private const int ExternalSyncGracePeriodMs = 1500;
     private (int Percent,
+             int Generation,
+             string? AlreadyAppliedDevice,
              List<DisplayInfo> Displays,
              Dictionary<string, double> PerMonOffsets,
              Dictionary<string, int> LastAppliedSnapshot)? _pendingHwWrite;
 
-    private void WriteHardwareAsync(int percent)
+    private void WriteHardwareAsync(int percent, string? alreadyAppliedDevice = null)
     {
+        if (_disposed) return;
         // v0.6.79: stamp the time so the external-sync poller can tell
         // we're still mid-write and stop fighting the value during the
         // panel's transition window.
@@ -670,7 +726,7 @@ public sealed class UnderlitEngine : IDisposable
         {
             // Replace any previously-pending write — we don't care about
             // intermediate values during a fast drag.
-            _pendingHwWrite = (percent, snapshot, perMon, lastSnap);
+            _pendingHwWrite = (percent, _displayGeneration, alreadyAppliedDevice, snapshot, perMon, lastSnap);
             kickoff = !_hwWriteInFlight;
             if (kickoff) _hwWriteInFlight = true;
         }
@@ -681,6 +737,8 @@ public sealed class UnderlitEngine : IDisposable
             while (true)
             {
                 (int Percent,
+                 int Generation,
+                 string? AlreadyAppliedDevice,
                  List<DisplayInfo> Displays,
                  Dictionary<string, double> PerMonOffsets,
                  Dictionary<string, int> LastAppliedSnapshot) work;
@@ -698,6 +756,12 @@ public sealed class UnderlitEngine : IDisposable
 
                 foreach (var d in work.Displays)
                 {
+                    if (work.Generation != System.Threading.Volatile.Read(ref _displayGeneration))
+                        break;
+                    if (string.Equals(d.StableId, work.AlreadyAppliedDevice, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (_hardware.PathFor(d) == HardwareBrightness.Path.None)
+                        continue;
                     double adj = work.Percent;
                     if (work.PerMonOffsets.TryGetValue(d.StableId, out var off))
                         adj = Math.Clamp(work.Percent + off, 0, 100);
@@ -706,37 +770,33 @@ public sealed class UnderlitEngine : IDisposable
                     if (work.LastAppliedSnapshot.TryGetValue(d.StableId, out int last) && last == target)
                         continue;
 
-                    if (_hardware.TrySet(d, target))
+                    bool success = _hardware.TrySet(d, target);
+                    _dispatcher.BeginInvoke((Action)(() =>
                     {
-                        _dispatcher.BeginInvoke((Action)(() =>
-                            _lastAppliedHardwarePct[d.StableId] = target), DispatcherPriority.Background);
-                    }
+                        if (_disposed || work.Generation != _displayGeneration) return;
+                        bool changed;
+                        if (success)
+                        {
+                            _lastAppliedHardwarePct[d.StableId] = target;
+                            changed = _failedHardwareDisplays.Remove(d.StableId);
+                        }
+                        else
+                        {
+                            _lastAppliedHardwarePct.Remove(d.StableId);
+                            changed = _failedHardwareDisplays.Add(d.StableId);
+                            if (changed) Logger.Warn($"Hardware brightness failed for {d.DeviceName}; using software dimming");
+                        }
+                        if (changed) ApplySoftwareNow();
+                    }), DispatcherPriority.Background);
                 }
             }
         });
     }
 
-    private void ApplyOverlayToAll(double globalOpacity)
-    {
-        if (_settings.PerMonitor.Count == 0)
-        {
-            _overlays.SetOpacity(globalOpacity);
-            return;
-        }
-        var perMon = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        foreach (var d in _displays)
-        {
-            if (_settings.PerMonitor.TryGetValue(d.StableId, out var pm) && pm.BrightnessOffset != 0)
-            {
-                double deltaOpacity = -pm.BrightnessOffset / 100.0 * 0.88;
-                perMon[d.StableId] = Math.Clamp(globalOpacity + deltaOpacity, 0, 0.92);
-            }
-        }
-        _overlays.SetOpacityPerMonitor(perMon, globalOpacity);
-    }
-
     public void Dispose()
     {
+        _disposed = true;
+        lock (_hwLock) _pendingHwWrite = null;
         _rampTimer?.Stop();
     }
 }

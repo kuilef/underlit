@@ -80,25 +80,28 @@ public sealed class GammaRampApplier : IDisposable
     /// Apply gamma to every registered monitor.
     /// brightness: 0..1 (1 = unmodified from original, 0 = fully dim via gamma — but Windows will clamp).
     /// warmthKelvin: 6500 = neutral, lower = warmer (more red / less blue).
+    /// Returns device names whose gamma write succeeded; missing devices need overlay compensation.
     /// </summary>
-    public void Apply(double brightness, int warmthKelvin)
+    public IReadOnlySet<string> Apply(double brightness, int warmthKelvin)
     {
         brightness = Math.Clamp(brightness, 0.0, 1.0);
         warmthKelvin = Math.Clamp(warmthKelvin, 1500, 6500);
 
         var rgb = KelvinToRgbMultipliers(warmthKelvin);
+        var applied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         lock (_lock)
         {
             foreach (var kvp in _dcByDevice)
             {
                 var ramp = BuildRamp(brightness, rgb.r, rgb.g, rgb.b);
-                if (!NativeMethods.SetDeviceGammaRamp(kvp.Value, ramp))
-                {
-                    // Common when HDR is on; we silently accept — overlay picks up the slack.
-                }
+                if (NativeMethods.SetDeviceGammaRamp(kvp.Value, ramp))
+                    applied.Add(kvp.Key);
             }
         }
+        // Missing DCs and rejected writes are both absent. The engine compensates
+        // their brightness contribution with the monitor's overlay.
+        return applied;
     }
 
     /// <summary>Reset all monitors to the ramp we captured at startup (or a linear ramp if we didn't have one).</summary>

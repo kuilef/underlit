@@ -1,5 +1,6 @@
 bin/
 obj/
+.dotnet/
 publish/
 *.user
 .vs/

@@ -7,7 +7,7 @@ A Windows brightness + color-temperature controller that extends **below** Windo
 - **Brightness past zero.** When your monitor's hardware brightness bottoms out, Underlit keeps dimming via gamma-ramp + a transparent black overlay on every monitor. You just keep pressing the brightness-down key.
 - **Color temperature with its own hotkey axis.** A second keyboard pair (default `Ctrl+Alt+Left/Right`) shifts warmth between 1500K and 6500K.
 - **Windows-style OSD.** Rounded, centered flyout matching the Win11 look, so it feels native.
-- **Multi-monitor aware.** One overlay per monitor, per-display gamma, DDC/CI for external monitors that support it.
+- **Multi-monitor aware.** One overlay per monitor, per-display gamma, DDC/CI for external monitors that support it. Displays without usable hardware brightness follow the full slider using a dim overlay, including above zero. This adjusts their visible brightness rather than their backlight.
 - **Schedule (optional).** Drifts toward a warmer/underlit baseline between your bedtime and wakeup times and back.
 - **Boost.** One keypress jumps back to full brightness + neutral warmth for a configurable number of seconds, then restores.
 - **Per-monitor offsets.** Dim your secondary display relative to the main one.

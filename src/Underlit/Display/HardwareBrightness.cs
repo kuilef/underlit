@@ -25,11 +25,24 @@ namespace Underlit.Display;
 public sealed class HardwareBrightness : IDisposable
 {
     private readonly DdcCiMonitorSet _ddc = new();
+    private readonly object _lock = new();
+    private IReadOnlyDictionary<string, Path> _paths = new Dictionary<string, Path>(StringComparer.OrdinalIgnoreCase);
     private bool _wmiTried;
     private bool _wmiAvailable;
     private string? _wmiOwnerDeviceName;
 
     public void Register(IReadOnlyList<DisplayInfo> displays)
+    {
+        // Display changes must not destroy physical handles during a worker write.
+        lock (_lock)
+        {
+            RegisterCore(displays);
+            var paths = displays.ToDictionary(d => d.DeviceName, PathForCore, StringComparer.OrdinalIgnoreCase);
+            System.Threading.Volatile.Write(ref _paths, paths);
+        }
+    }
+
+    private void RegisterCore(IReadOnlyList<DisplayInfo> displays)
     {
         _ddc.Register(displays);
         if (!_wmiTried)
@@ -67,13 +80,20 @@ public sealed class HardwareBrightness : IDisposable
         // are easier to diagnose from a log dump.
         foreach (var d in displays)
         {
-            Logger.Info($"HardwareBrightness: {d.DeviceName} {(d.IsPrimary ? "(primary) " : "")}→ {PathFor(d)}");
+            Logger.Info($"HardwareBrightness: {d.DeviceName} {(d.IsPrimary ? "(primary) " : "")}→ {PathForCore(d)}");
         }
     }
 
     public enum Path { None, Wmi, DdcCi }
 
     public Path PathFor(DisplayInfo d)
+    {
+        // Rendering runs on the UI thread: never wait here for a slow DDC write.
+        var paths = System.Threading.Volatile.Read(ref _paths);
+        return paths.TryGetValue(d.DeviceName, out var path) ? path : Path.None;
+    }
+
+    private Path PathForCore(DisplayInfo d)
     {
         // Prefer DDC/CI when available — it's per-monitor, so multiple
         // displays can be driven independently. WMI is a fallback for
@@ -89,16 +109,27 @@ public sealed class HardwareBrightness : IDisposable
     /// </summary>
     public bool TrySet(DisplayInfo d, int percent)
     {
-        switch (PathFor(d))
+        lock (_lock)
         {
-            case Path.Wmi:   return WmiBrightness.TrySet(percent);
-            case Path.DdcCi: return _ddc.TrySet(d.DeviceName, percent);
-            default:         return false;
+            switch (PathForCore(d))
+            {
+                case Path.Wmi:   return WmiBrightness.TrySet(percent);
+                case Path.DdcCi: return _ddc.TrySet(d.DeviceName, percent);
+                default:         return false;
+            }
         }
     }
 
     public bool AnyDisplayHasHardwarePath(IEnumerable<DisplayInfo> displays)
         => displays.Any(d => PathFor(d) != Path.None);
 
-    public void Dispose() => _ddc.Dispose();
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            _ddc.Dispose();
+            System.Threading.Volatile.Write(ref _paths,
+                new Dictionary<string, Path>(StringComparer.OrdinalIgnoreCase));
+        }
+    }
 }
