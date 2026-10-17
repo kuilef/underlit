@@ -14,6 +14,13 @@ namespace Underlit
 
 namespace Underlit.Display
 {
+    public static class WmiBrightness
+    {
+        public static int Reads;
+        public static int? Value;
+        public static int? TryGet() { Interlocked.Increment(ref Reads); return Value; }
+    }
+
     public sealed class GammaRampApplier
     {
         public HashSet<string> Unavailable { get; } = new(StringComparer.OrdinalIgnoreCase);

@@ -49,6 +49,7 @@ public sealed class WgcCapture : IDisposable
     private IntPtr                            _stagingTex;
     private int                               _stagingW;
     private int                               _stagingH;
+    private readonly object _textureLock = new();
 
     private bool _disposed;
     private bool _running;
@@ -175,16 +176,37 @@ public sealed class WgcCapture : IDisposable
     /// the Win11 capture-border indicator. Safe to call multiple times.</summary>
     public void StopCapture()
     {
-        if (_session == null && _framePool == null) return;
-        try { _session?.Dispose(); } catch { }
-        _session = null;
+        GraphicsCaptureSession? session;
+        Direct3D11CaptureFramePool? framePool;
+        lock (_textureLock)
+        {
+            session = _session;
+            framePool = _framePool;
+            _session = null;
+            _framePool = null;
+        }
+        try { session?.Dispose(); } catch { }
         try
         {
-            if (_framePool != null) _framePool.FrameArrived -= OnFrameArrived;
-            _framePool?.Dispose();
+            if (framePool != null) framePool.FrameArrived -= OnFrameArrived;
+            framePool?.Dispose();
         } catch { }
-        _framePool = null;
-        Logger.Info("WGC: StopCapture — session disposed, border removed");
+
+        // Stop frame processing before freeing the staging texture. Disposing
+        // the WinRT pool happens outside this lock because it can wait for a
+        // worker callback. Keep the small D3D device for fast OSD reopening.
+        lock (_textureLock)
+        {
+            if (_stagingTex != IntPtr.Zero) { Marshal.Release(_stagingTex); _stagingTex = IntPtr.Zero; }
+            _stagingW = _stagingH = 0;
+            lock (FrameLock)
+            {
+                LatestFrame = null;
+                FrameWidth = FrameHeight = FrameStride = 0;
+            }
+        }
+        if (session != null || framePool != null)
+            Logger.Info("WGC: StopCapture — session and frame buffers released, border removed");
     }
 
     private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
@@ -237,6 +259,15 @@ public sealed class WgcCapture : IDisposable
     }
 
     private void ProcessTexture(IntPtr texture, int w, int h)
+    {
+        lock (_textureLock)
+        {
+            if (_disposed || _session == null) return;
+            ProcessTextureCore(texture, w, h);
+        }
+    }
+
+    private void ProcessTextureCore(IntPtr texture, int w, int h)
     {
         EnsureStagingTexture(w, h);
         ID3D11DeviceContext_CopyResource(_d3dContext, _stagingTex, texture);

@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/Underlit/Core/UnderlitEngine.cs" Link="Production/UnderlitEngine.cs" />
+    <Compile Include="../../src/Underlit/Core/BrightnessSyncPoller.cs" Link="Production/BrightnessSyncPoller.cs" />
     <Compile Include="../../src/Underlit/Display/DisplayInfo.cs" Link="Production/DisplayInfo.cs" />
     <Compile Include="../../src/Underlit/Settings/AppSettings.cs" Link="Production/AppSettings.cs" />
   </ItemGroup>

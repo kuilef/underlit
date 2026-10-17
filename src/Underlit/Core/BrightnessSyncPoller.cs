@@ -21,6 +21,7 @@ public sealed class BrightnessSyncPoller : IDisposable
     private readonly DispatcherTimer _timer;
     private bool _disposed;
     private bool _busy;
+    private bool _started;
 
     public BrightnessSyncPoller(UnderlitEngine engine, Dispatcher dispatcher, int intervalMs)
     {
@@ -33,14 +34,37 @@ public sealed class BrightnessSyncPoller : IDisposable
         _timer.Tick += OnTick;
     }
 
-    public void Start() => _timer.Start();
-    public void Stop() => _timer.Stop();
+    public void Start()
+    {
+        _started = true;
+        RefreshAvailability();
+    }
+
+    public void Stop()
+    {
+        _started = false;
+        _timer.Stop();
+    }
+
+    /// <summary>Re-evaluate after a display change or resume. DDC/CI-only
+    /// desktops have no Windows laptop-brightness slider to poll.</summary>
+    public void RefreshAvailability()
+    {
+        if (!_disposed && _started && _engine.SupportsExternalBrightnessSync)
+            _timer.Start();
+        else _timer.Stop();
+    }
 
     public void UpdateInterval(int intervalMs)
         => _timer.Interval = TimeSpan.FromMilliseconds(Math.Clamp(intervalMs, 500, 30_000));
 
     private void OnTick(object? sender, EventArgs e)
     {
+        if (!_engine.SupportsExternalBrightnessSync)
+        {
+            RefreshAvailability();
+            return;
+        }
         if (_busy || _disposed) return;
         _busy = true;
         // Fire the WMI read on a thread-pool thread; hop back to UI to forward.
@@ -53,7 +77,8 @@ public sealed class BrightnessSyncPoller : IDisposable
                 {
                     try
                     {
-                        if (cur.HasValue) _engine.SyncFromExternalHardware(cur.Value);
+                        if (!_disposed && _started && _engine.SupportsExternalBrightnessSync && cur.HasValue)
+                            _engine.SyncFromExternalHardware(cur.Value);
                     }
                     finally { _busy = false; }
                 }), DispatcherPriority.Background);
@@ -68,7 +93,7 @@ public sealed class BrightnessSyncPoller : IDisposable
     public void Dispose()
     {
         _disposed = true;
-        _timer.Stop();
+        Stop();
         _timer.Tick -= OnTick;
     }
 }

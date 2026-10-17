@@ -179,7 +179,7 @@ public sealed class UnderlitHost : IDisposable
             // Seed from Windows' current brightness so our level matches the Quick Settings slider.
             // Only applies if a WMI-controllable panel exists and we're currently in (or above)
             // the positive range. If the user has us at a negative level (extended dim), leave it.
-            if (_engine!.CurrentBrightness >= 0)
+            if (_engine!.SupportsExternalBrightnessSync && _engine.CurrentBrightness >= 0)
             {
                 var initial = WmiBrightness.TryGet();
                 if (initial.HasValue) _engine.SyncFromExternalHardware(initial.Value);
@@ -344,6 +344,8 @@ public sealed class UnderlitHost : IDisposable
         {
             try
             {
+                if (_engine != null) _hardware.Register(_engine.Displays);
+                _syncPoller?.RefreshAvailability();
                 _engine?.ReapplyAfterResume();
                 // Re-tick the scheduler so the warmth catches up to the
                 // current time-of-day if the laptop slept across a ramp.
@@ -366,6 +368,7 @@ public sealed class UnderlitHost : IDisposable
             try
             {
                 _engine?.RefreshDisplays(DisplayManager.Enumerate());
+                _syncPoller?.RefreshAvailability();
                 // v0.6.48: tear down the OSD's live-glass capture too.
                 // Its WGC item is bound to a specific HMONITOR; if that
                 // monitor disconnected, the capture goes stale and the

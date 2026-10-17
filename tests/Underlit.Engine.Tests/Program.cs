@@ -16,6 +16,41 @@ internal static class Program
     {
         var tests = new (string Name, Action Test)[]
         {
+            ("Desktop without WMI never polls laptop brightness", () =>
+            {
+                using var f = new Fixture(50);
+                WmiBrightness.Reads = 0;
+                using var poller = new BrightnessSyncPoller(f.Engine, Dispatcher.CurrentDispatcher, 500);
+                poller.Start();
+                PumpFor(1100);
+                Equal(0, WmiBrightness.Reads);
+            }),
+            ("WMI polling follows monitor availability and restarts after reconnect", () =>
+            {
+                using var f = new Fixture(50);
+                WmiBrightness.Reads = 0;
+                WmiBrightness.Value = null;
+                using var poller = new BrightnessSyncPoller(f.Engine, Dispatcher.CurrentDispatcher, 500);
+                poller.Start();
+                f.Hardware.Paths[Second.DeviceName] = HardwareBrightness.Path.Wmi;
+                poller.RefreshAvailability();
+                PumpUntil(() => WmiBrightness.Reads >= 2); // A transient null must not disable support.
+                f.Hardware.Paths[Second.DeviceName] = HardwareBrightness.Path.None;
+                poller.RefreshAvailability();
+                PumpFor(50); // Drain the already-running read, if any.
+                int before = WmiBrightness.Reads;
+                PumpFor(1100);
+                Equal(before, WmiBrightness.Reads);
+                f.Hardware.Paths[Second.DeviceName] = HardwareBrightness.Path.Wmi;
+                poller.RefreshAvailability();
+                PumpUntil(() => WmiBrightness.Reads > before);
+                poller.Stop();
+                poller.RefreshAvailability();
+                PumpFor(50);
+                before = WmiBrightness.Reads;
+                PumpFor(600);
+                Equal(before, WmiBrightness.Reads);
+            }),
             ("Unsupported secondary dims in positive range", () =>
             {
                 using var f = new Fixture(50);

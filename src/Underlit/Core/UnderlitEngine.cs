@@ -107,6 +107,8 @@ public sealed class UnderlitEngine : IDisposable
     // ---- Displays ----
     private List<DisplayInfo> _displays = new();
     public IReadOnlyList<DisplayInfo> Displays => _displays;
+    public bool SupportsExternalBrightnessSync
+        => _displays.Any(d => _hardware.PathFor(d) == HardwareBrightness.Path.Wmi);
 
     // Debounce: last-value we've sent via WMI/DDC-CI. Also the anchor for
     // "is this WMI read an external change or our own echo?" in the sync poller.

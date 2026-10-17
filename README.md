@@ -4,7 +4,7 @@ A Windows tray app for brightness and color temperature. Dim below a monitor's
 hardware minimum, adjust warmth with hotkeys, and schedule evening/morning changes.
 
 This fork adds reliable dimming for secondary displays without hardware brightness
-control and smaller Windows packages. The original project is
+control, lower memory use and a choice of Windows build profiles. The original project is
 [DietervanDortmont/underlit](https://github.com/DietervanDortmont/underlit).
 
 ## Install
@@ -36,24 +36,37 @@ and legacy Startup shortcut, while keeping the settings file.
 
 ## Changes from DietervanDortmont/underlit:main
 
-This release is based on upstream `main` at
+This fork is based on upstream `main` at
 [`1483629`](https://github.com/DietervanDortmont/underlit/tree/1483629718dc07b0788bbbc2b35835b2c120034d)
 (v0.7.2), checked on 2026-10-18. Upstream provides the application, UI, warmth
-schedule and Hue integration. This fork changes the display and packaging paths:
+schedule and Hue integration. This fork changes display handling, resource lifetimes
+and packaging:
 
-| Area | Upstream at that commit | This fork |
+| Area | Upstream at that commit | This fork: change and purpose |
 | --- | --- | --- |
 | Monitor without WMI/DDC brightness | Software layers remain neutral above zero. | That monitor dims with an overlay across the positive slider range as well. Its backlight is not changed. |
 | Hardware or gamma write failure | Hardware failures do not activate a per-monitor fallback; rejected gamma writes are ignored. | Failed hardware writes activate software dimming; rejected gamma brightness is compensated by that monitor's overlay. |
 | Software brightness response | Identical gamma is written to each display on every ramp tick. | Identical successful writes are cached for up to 500 ms, with invalidation after display changes and resume. |
 | Reconnects and native brightness changes | Reconnects may retain stale brightness cache; WMI sync assumes the primary display owns WMI. | Reconnects reapply the target. Native WMI changes are attributed to the internal panel and propagated to other displays. |
-| Downloads | ReadyToRun is enabled for a self-contained build. | ReadyToRun is disabled, standalone libraries are compressed, and a smaller runtime-dependent profile is available. |
-| Verification | No engine/display regression runners. | 23 automated engine/gamma checks, plus installer installation/removal checks on Windows CI. |
+| Background WMI polling | Polls laptop brightness even on desktops without WMI brightness support. | Polls only while a display has a WMI brightness path, avoiding repeated unsupported queries and exception logging. Rechecks support on display changes and resume; temporary probe errors preserve known laptop support. |
+| WMI object lifetime | Query results and returned management objects are not explicitly disposed. | Disposes both immediately after use to release their WMI/COM resources. |
+| Overlay memory | Creates a full-screen transparent WPF window for every monitor, including monitors needing no overlay. | Creates windows only while their dimming opacity is positive and closes them at zero, avoiding unused full-screen rendering surfaces. |
+| Liquid Glass capture memory | Stopping capture retains the last full-monitor frame and staging texture. | Releases both when the OSD capture stops, with synchronization against frame processing; keeps the graphics device for quick reopening. |
+| Publish profiles | ReadyToRun is enabled for a self-contained build. | Disables ReadyToRun to reduce EXE size. `PortableCompact` compresses bundled libraries for smaller downloads; `DesktopRuntime` uses an installed runtime. `PortableLowMemory` keeps standalone libraries uncompressed to reduce RAM use at the cost of a larger EXE. |
+| Verification | No engine/display/resource regression runners. | 31 automated engine, gamma and resource checks cover dimming, WMI availability, overlay lifetimes and capture cleanup; Windows CI also checks installer installation/removal. |
 
 Local pre-release builds measured about **25 MiB** for the runtime-dependent EXE
 and **75 MiB** for the standalone EXE. Download sizes vary with the SDK and runtime.
 The standalone package can take longer to start while libraries are decompressed.
 This does not add a delay to brightness changes once the application is running.
+
+On one Windows PC with two monitors, these memory changes reduced the compact
+standalone build's private working set from about **228 to 173 MiB** and the
+runtime-dependent build's from **154 to 125 MiB**. The uncompressed
+`PortableLowMemory` build measured **116 MiB**, with a **179 MiB** EXE. Each value
+is the median of five idle samples after a 12-second startup warmup, using the
+same saved settings. These are local measurements within this fork; memory use
+varies with configuration and activity.
 
 Software dimming follows **Software fade duration** in settings (80 ms in the
 tested configuration); hardware brightness snaps directly. Set the duration to
@@ -86,21 +99,26 @@ dotnet publish src/Underlit/Underlit.csproj -c Release -r win-x64 --self-contain
 
 The single-file `publish\Underlit.exe` is ready to run. To build a proper installer, install [Inno Setup 6](https://jrsoftware.org/isdl.php) and compile `installer/Underlit.iss`.
 
-For smaller downloads, use a publish profile:
+Choose a publish profile to prioritize download size or memory use:
 
 ```powershell
 # Compressed standalone EXE, including .NET Desktop Runtime.
 dotnet publish src/Underlit/Underlit.csproj -c Release -p:PublishProfile=PortableCompact
 
+# Standalone EXE with lower RAM use and a larger file, including .NET Desktop Runtime.
+dotnet publish src/Underlit/Underlit.csproj -c Release -p:PublishProfile=PortableLowMemory
+
 # Smaller EXE using an installed .NET 8 Desktop Runtime (x64).
 dotnet publish src/Underlit/Underlit.csproj -c Release -p:PublishProfile=DesktopRuntime
 ```
 
-The profiles write to `artifacts/portable-compact` and `artifacts/desktop-runtime`.
-Both contain the same application features. ReadyToRun is disabled to avoid a
-large extra precompiled image. The standalone profile compresses its embedded
-libraries and may take longer to start; this does not add a fade delay when
-adjusting brightness. Native libraries are bundled and extracted on first use.
+The profiles write to `artifacts/portable-compact`, `artifacts/portable-low-memory`
+and `artifacts/desktop-runtime`. All three contain the same application features.
+ReadyToRun is disabled to avoid a large extra precompiled image. `PortableCompact`
+compresses its embedded libraries and decompresses them into memory at startup;
+`PortableLowMemory` leaves them uncompressed. Compressed builds may take longer
+to start; this does not add a fade delay when adjusting brightness. Native libraries are
+bundled and extracted on first use.
 The DesktopRuntime profile requires `Microsoft.WindowsDesktop.App 8.x` (x64);
 the base .NET Runtime alone is insufficient. WPF is not trimmed.
 

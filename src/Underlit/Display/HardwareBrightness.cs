@@ -27,7 +27,6 @@ public sealed class HardwareBrightness : IDisposable
     private readonly DdcCiMonitorSet _ddc = new();
     private readonly object _lock = new();
     private IReadOnlyDictionary<string, Path> _paths = new Dictionary<string, Path>(StringComparer.OrdinalIgnoreCase);
-    private bool _wmiTried;
     private bool _wmiAvailable;
     private string? _wmiOwnerDeviceName;
 
@@ -45,11 +44,10 @@ public sealed class HardwareBrightness : IDisposable
     private void RegisterCore(IReadOnlyList<DisplayInfo> displays)
     {
         _ddc.Register(displays);
-        if (!_wmiTried)
-        {
-            _wmiTried = true;
-            _wmiAvailable = WmiBrightness.TryGet().HasValue;
-        }
+        // A dock/display change (or resume) can change WMI availability.
+        // Probe once per registration, never on every background timer tick.
+        var wmiBrightness = WmiBrightness.TryGet(out bool unsupported);
+        _wmiAvailable = wmiBrightness.HasValue || (_wmiAvailable && !unsupported);
 
         // v0.6.76: pick the first display without DDC/CI support as the
         // WMI owner. Laptop panels don't expose DDC/CI on the I2C bus, so
