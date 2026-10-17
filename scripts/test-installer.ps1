@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)][string]$InstallerPath,
     [Parameter(Mandatory)][string]$ExpectedExePath,
     [Parameter(Mandatory)][string]$ExpectedVersion,
-    [string]$LogDirectory = "artifacts\installer-smoke"
+    [string]$LogDirectory = "artifacts\installer-smoke",
+    [switch]$EnableStartupTask
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,15 +36,20 @@ function Test-UnderlitAutostartTask {
     return $query.ExitCode -eq 0
 }
 if (Test-UnderlitAutostartTask) { throw "Existing Underlit scheduled task; refusing to overwrite it." }
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+if (Get-ItemProperty -LiteralPath $runKey -Name Underlit -ErrorAction SilentlyContinue) {
+    throw "Existing Underlit startup value; refusing to overwrite it."
+}
 [void](New-Item -ItemType Directory -Path $settingsRoot)
 $settingsPath = Join-Path $settingsRoot "settings.json"
 '{"BrightnessLevel":45,"WarmthKelvin":2734,"SmokeMarker":"preserve"}' |
     Set-Content -LiteralPath $settingsPath -Encoding utf8
 $settingsHash = (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash
 
+$tasks = if ($EnableStartupTask) { "startwithwindows,desktopicon" } else { "desktopicon" }
 $setupArguments = @(
     "/SP-", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER",
-    "/DIR=`"$installDir`"", "/TASKS=startwithwindows,desktopicon",
+    "/DIR=`"$installDir`"", "/TASKS=$tasks",
     "/LOG=`"$(Join-Path $logs 'install.log')`""
 )
 $setup = Start-Process -FilePath $installer -ArgumentList $setupArguments -Wait -PassThru -WindowStyle Hidden
@@ -61,9 +67,17 @@ foreach ($shortcut in @($startMenuLink, $desktopLink)) {
     $shell = New-Object -ComObject WScript.Shell
     if ($shell.CreateShortcut($shortcut).TargetPath -ne $installedExe) { throw "Incorrect shortcut target." }
 }
-$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-$runValue = (Get-ItemProperty -LiteralPath $runKey -Name Underlit).Underlit
-if ($runValue.Trim('"') -ne $installedExe) { throw "Incorrect startup registration." }
+if ($EnableStartupTask) {
+    $runValue = (Get-ItemProperty -LiteralPath $runKey -Name Underlit).Underlit
+    if ($runValue.Trim('"') -ne $installedExe) { throw "Incorrect startup registration." }
+} else {
+    if (Get-ItemProperty -LiteralPath $runKey -Name Underlit -ErrorAction SilentlyContinue) {
+        throw "Installer enabled startup without selecting the task."
+    }
+    # AutoStart.Set creates this value when startup is enabled inside the app.
+    [void](New-Item -Path $runKey -Force)
+    New-ItemProperty -LiteralPath $runKey -Name Underlit -PropertyType String -Value "`"$installedExe`"" -Force | Out-Null
+}
 if ((Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash -ne $settingsHash) {
     throw "Installer changed existing settings."
 }

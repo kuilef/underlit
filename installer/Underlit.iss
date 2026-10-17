@@ -71,3 +71,11 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""\Underlit\Autostart""
 [UninstallDelete]
 ; Older versions also used this application-owned Startup shortcut.
 Type: files; Name: "{userstartup}\Underlit.lnk"
+
+[Code]
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    { The app can enable startup after installation, outside the install log. }
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Underlit');
+end;

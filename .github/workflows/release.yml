@@ -84,7 +84,13 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          ./scripts/test-installer.ps1 -InstallerPath "artifacts/release/UnderlitSetup-$env:RELEASE_VERSION.exe" -ExpectedExePath artifacts/portable-compact/Underlit.exe -ExpectedVersion $env:RELEASE_VERSION
+          $smoke = @{
+            InstallerPath = "artifacts/release/UnderlitSetup-$env:RELEASE_VERSION.exe"
+            ExpectedExePath = 'artifacts/portable-compact/Underlit.exe'
+            ExpectedVersion = $env:RELEASE_VERSION
+          }
+          ./scripts/test-installer.ps1 @smoke -EnableStartupTask -LogDirectory artifacts/installer-smoke/startup-selected
+          ./scripts/test-installer.ps1 @smoke -LogDirectory artifacts/installer-smoke/startup-from-app
 
       - name: Package portable downloads and checksums
         shell: pwsh
