@@ -34,6 +34,8 @@ after those checks pass. The tag must match `<Version>` in the project and have
 release notes at `docs/releases/X.Y.Z.md`. Contributors do not need Inno Setup
 installed locally. The installer smoke test runs only on a disposable Windows
 GitHub Actions runner and refuses to overwrite an existing installation or settings.
+The workflow can also be started manually: leave the tag input empty to only
+build and test, or provide an existing release tag to publish its checked source.
 
 ## Code layout
 

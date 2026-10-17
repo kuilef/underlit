@@ -7,9 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag (for example v0.7.3)'
-        required: true
-        default: 'v0.7.3'
+        description: 'Existing release tag to publish; leave empty to only build and test'
+        required: false
 
 permissions:
   contents: write
@@ -22,7 +21,7 @@ jobs:
       - name: Checkout exact source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' && format('refs/tags/{0}', inputs.tag) || github.sha }}
 
       - name: Resolve release version
         id: tag
@@ -32,8 +31,9 @@ jobs:
         run: |
           [xml]$project = Get-Content src/Underlit/Underlit.csproj
           $version = @($project.Project.PropertyGroup.Version | Where-Object { $_ })[0]
-          $publish = $env:GITHUB_REF_TYPE -eq 'tag' -or $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch'
-          $tag = if ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch') { $env:REQUESTED_TAG } elseif ($publish) { $env:GITHUB_REF_NAME } else { "v$version" }
+          $manualRelease = $env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($env:REQUESTED_TAG)
+          $publish = $env:GITHUB_REF_TYPE -eq 'tag' -or $manualRelease
+          $tag = if ($manualRelease) { $env:REQUESTED_TAG } elseif ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$version" }
           if ($tag -notmatch '^v\d+\.\d+\.\d+$' -or $tag -ne "v$version") {
             throw "Tag '$tag' does not match project version '$version'."
           }
