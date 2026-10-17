@@ -27,6 +27,8 @@ Release downloads:
 
 Windows 10 (2004+) or Windows 11, x64. The installer supports per-user installation
 and removal through Windows Settings. These community builds are not code-signed.
+Uninstall also removes Underlit's scheduled autostart task and the legacy Startup
+shortcut, while keeping the settings file.
 
 По-русски: для обычной установки скачайте `UnderlitSetup-0.7.3.exe` из
 [Releases](https://github.com/kuilef/underlit/releases/latest). Отдельно ставить .NET

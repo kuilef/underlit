@@ -63,3 +63,11 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+; AutoStart.EnsureValid also registers this task after the application is run.
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""\Underlit\Autostart"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveUnderlitAutostartTask"
+
+[UninstallDelete]
+; Older versions also used this application-owned Startup shortcut.
+Type: files; Name: "{userstartup}\Underlit.lnk"
